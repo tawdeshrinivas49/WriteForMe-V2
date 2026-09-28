@@ -1,0 +1,296 @@
+// Prisma Schema for WriteForMe
+
+generator client {
+  provider        = "prisma-client-js"
+  previewFeatures = ["postgresqlExtensions"]
+}
+
+datasource db {
+  provider   = "postgresql"
+  url        = env("DATABASE_URL")
+  directUrl  = env("DIRECT_URL")
+  extensions = [postgis]
+}
+
+// ==========================================
+// ENUMS
+// ==========================================
+
+enum Role {
+  STUDENT
+  VOLUNTEER
+  SUPER_ADMIN
+  ORG_ADMIN
+}
+
+enum Gender {
+  MALE
+  FEMALE
+  OTHER
+}
+
+enum GenderPreference {
+  ANY
+  MALE_ONLY
+  FEMALE_ONLY
+}
+
+enum RequestStatus {
+  CREATED               // System searching for volunteers
+  MATCHED               // Volunteer assigned
+  IN_PERSON_VERIFIED    // Invigilator PIN matched
+  IN_PROGRESS           // Exam actively ongoing
+  COMPLETED             // Payout triggered
+  CANCELLED
+  PENDING_PAYMENT   // NEW
+  REFUNDED          // NEW (for timeout refunds)
+}
+
+enum VerificationStatus {
+  UNVERIFIED
+  PENDING_MANUAL_AUDIT
+  VERIFIED_DIGILOCKER
+  VERIFIED_MANUAL
+}
+
+enum VehicleType {
+  NONE
+  TWO_WHEELER
+  FOUR_WHEELER
+  BICYCLE
+}
+
+enum TransactionType {
+  PLATFORM_FEE_INBOUND
+  SCRIBE_PAYOUT_OUTBOUND
+  REFUND
+}
+
+enum TransactionStatus {
+  PENDING
+  ESCROWED
+  QUEUED_FOR_PAYOUT
+  SUCCESS
+  FAILED
+}
+
+enum FeedbackCategory {
+  APP_UX
+  MATCHING_SPEED
+  PAYMENTS_ESCROW
+  BUG_REPORT
+  GENERAL
+}
+
+// ==========================================
+// MODELS
+// ==========================================
+
+model User {
+  id                  String   @id @default(uuid())
+  phone               String   @unique
+  name                String
+  gender              Gender
+  role                Role
+  profileImageUrl     String?
+  isActive            Boolean  @default(true)
+  createdAt           DateTime @default(now())
+  updatedAt           DateTime @updatedAt
+
+  email          String?   @unique
+  password       String?   // hashed password
+  address        String?
+  preferredLanguage String?
+  googleId       String?   @unique
+
+  // ✅ NEW: Store hashed DigiLocker ID
+  digilockerIdHash    String?  @unique   // make it optional initially
+
+  candidateProfile    CandidateProfile?
+  volunteerProfile    VolunteerProfile?
+  organizationId      String?
+  organization        Organization?    @relation(fields: [organizationId], references: [id])
+  platformFeedbacks   PlatformFeedback[]
+}
+
+
+model CandidateProfile {
+  id              String             @id @default(uuid())
+  userId          String             @unique
+  user            User               @relation(fields: [userId], references: [id], onDelete: Cascade)
+  
+  udidNumber      String?            @unique
+  udidVerified    VerificationStatus @default(UNVERIFIED)
+  disabilityType  String?
+  
+  homeLat         Float?
+  homeLng         Float?
+  location        Unsupported("geometry(Point, 4326)")?
+
+  requests        ExamRequest[]      @relation("CandidateRequests")
+}
+
+model VolunteerProfile {
+  id                  String             @id @default(uuid())
+  userId              String             @unique
+  user                User               @relation(fields: [userId], references: [id], onDelete: Cascade)
+  
+  upiId               String?
+  xpPoints            Int                @default(0)
+  totalExams          Int                @default(0)
+  averageRating       Float              @default(0.0)
+  isAvailable         Boolean            @default(true)
+  
+  // Transportation Attributes
+  hasVehicle          Boolean            @default(false)
+  vehicleType         VehicleType        @default(NONE)
+  
+  // Qualifications
+  highestEducation    String?
+  eduVerified         VerificationStatus @default(UNVERIFIED)
+  eduDocumentUrl      String?
+  maxExamLevelAllowed String             @default("SECONDARY")
+  
+  // Live Tracking Coords
+  lastLat             Float?
+  lastLng             Float?
+  location            Unsupported("geometry(Point, 4326)")?
+  
+  requests            ExamRequest[]      @relation("VolunteerRequests")
+}
+
+model ExamRequest {
+  id                    String              @id @default(uuid())
+  
+  candidateId           String
+  candidate             CandidateProfile    @relation("CandidateRequests", fields: [candidateId], references: [id])
+  volunteerId           String?
+  volunteer             VolunteerProfile?   @relation("VolunteerRequests", fields: [volunteerId], references: [id])
+  
+  examName              String
+  advtNumber            String?
+  admitCardUrl          String?
+  examDate              DateTime
+  durationMinutes       Int
+  
+  // Constraints & Matching
+  genderPref            GenderPreference    @default(ANY)
+  status                RequestStatus       @default(CREATED)
+  
+  // Transportation Needs
+  requiresTransport     Boolean             @default(false)
+  pickupLat             Float?
+  pickupLng             Float?
+  pickupLocation        Unsupported("geometry(Point, 4326)")?
+  
+  // Exam Center Location
+  examCenterName        String?
+  examCenterLat         Float
+  examCenterLng         Float
+  examLocation          Unsupported("geometry(Point, 4326)")?
+
+  masterExamId          String?
+  masterExam            MasterExam?         @relation(fields: [masterExamId], references: [id])
+  isFromMasterRegistry  Boolean             @default(false)
+  
+  invigilatorPin        String?
+  completionPin         String?
+  pinVerifiedAt         DateTime?
+  completedAt           DateTime?
+  
+  payments              PaymentTransaction[]
+  review                ScribeReview?
+
+  createdAt             DateTime            @default(now())
+  updatedAt             DateTime            @updatedAt
+}
+
+model PaymentTransaction {
+  id           String            @id @default(uuid())
+  requestId    String
+  request      ExamRequest       @relation(fields: [requestId], references: [id])
+  amount       Float
+  type         TransactionType
+  status       TransactionStatus @default(PENDING)
+  pgOrderId    String?
+  pgPaymentId  String?           // ✅ THIS MUST EXIST
+  payoutRefId  String?
+  failureReason String?
+  createdAt    DateTime          @default(now())
+  updatedAt    DateTime          @updatedAt
+}
+
+model Organization {
+  id              String   @id @default(uuid())
+  name            String
+  type            String
+  domain          String?  @unique
+  reputationScore Int      @default(100)
+  
+  users           User[]
+  
+  createdAt       DateTime @default(now())
+}
+
+model ScribeReview {
+  id        String      @id @default(uuid())
+  requestId String      @unique
+  request   ExamRequest @relation(fields: [requestId], references: [id])
+  
+  rating    Int
+  comment   String?
+  tags      String?
+  isPublic  Boolean     @default(false)
+  
+  createdAt DateTime    @default(now())
+}
+
+model PlatformFeedback {
+  id           String           @id @default(uuid())
+  userId       String
+  user         User             @relation(fields: [userId], references: [id], onDelete: Cascade)
+  userRole     String?          // e.g. 'CANDIDATE', 'VOLUNTEER', 'ORGANIZATION'
+  category     FeedbackCategory @default(GENERAL)
+  rating       Int              // 1 to 5 CSAT rating
+  feedbackText String           @db.Text
+  appVersion   String?
+  deviceInfo   String?
+  createdAt    DateTime         @default(now())
+  updatedAt    DateTime         @updatedAt
+
+  @@index([userId])
+  @@index([category])
+}
+
+model SystemSetting {
+  id                    String  @id @default("GLOBAL")
+  isPlatformFree        Boolean @default(true)
+  freeRequestQuotaLimit Int     @default(1000)
+  currentRequestCount   Int     @default(0)
+  defaultPlatformFee    Float   @default(50.0)
+  defaultHonorariumINR  Float   @default(500.0)
+  transportAllowanceINR Float   @default(250.0)
+}
+
+model MasterExam {
+  id        String        @id @default(uuid())
+  title     String
+  organizer String
+  category  String
+  isActive  Boolean       @default(true)
+  
+  requests  ExamRequest[]
+
+  createdAt DateTime      @default(now())
+}
+
+model AuthSession {
+  id           String   @id @default(uuid())
+  state        String   @unique
+  codeVerifier String
+  role         String   // "CANDIDATE" or "VOLUNTEER"
+  expiresAt    DateTime
+  createdAt    DateTime @default(now())
+  metadata Json? // store { email, role, name, etc }
+
+}
