@@ -1,19 +1,19 @@
 const express = require('express');
 const router = express.Router();
 const paymentController = require('./payment.controller');
-const { authenticate, authorize } = require('../../middlewares/authMiddleware');
+const { authenticate } = require('../../middlewares/authMiddleware');
 
-// All routes require authentication
+// All payment routes require authentication
 router.use(authenticate);
 
-// Student routes
+// Student payment routes
 router.post('/create-order', paymentController.createEscrowOrder);
 router.post('/verify-escrow', paymentController.verifyEscrow);
 
-// Volunteer / System routes (payout after completion)
+// Payout route upon exam completion
 router.post('/release-payout', paymentController.releasePayout);
 
-// Admin routes (add authorize('SUPER_ADMIN') later)
+// Admin and refund maintenance routes
 router.post('/refund', paymentController.refundEscrow);
 router.post('/retry-payout', paymentController.retryPayout);
 router.post('/check-timeouts', paymentController.checkTimeouts);

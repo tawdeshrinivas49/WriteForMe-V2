@@ -6,7 +6,6 @@ exports.createEscrowOrder = async (req, res) => {
     if (!requestId) {
       return res.status(400).json({ success: false, error: 'requestId required' });
     }
-    // Optional: ensure user owns this request (auth middleware already ensures user)
     const orderData = await PaymentService.createEscrowOrder(requestId, adminHonorariumOverride);
     res.status(200).json({ success: true, data: orderData });
   } catch (error) {
